@@ -1,0 +1,20 @@
+
+# Dependencias
+node_modules/
+
+# Sesiones y credenciales de WhatsApp
+sessions/
+auth_info/
+baileys_auth_info/
+
+# Variables privadas
+.env
+.env.*
+!.env.example
+
+# Registros
+*.log
+npm-debug.log*
+
+# Archivos temporales
+.DS_Store
