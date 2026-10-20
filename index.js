@@ -1,16 +1,24 @@
 
-import makeWASocket, {
-  DisconnectReason,
-  useMultiFileAuthState,
-  fetchLatestBaileysVersion
-} from "@whiskeysockets/baileys";
-
+import * as baileys from "@whiskeysockets/baileys";
 import pino from "pino";
 import qrcode from "qrcode-terminal";
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+const makeWASocket = baileys.default || baileys.makeWASocket;
+const {
+  DisconnectReason,
+  useMultiFileAuthState,
+  fetchLatestBaileysVersion
+} = baileys;
+
+if (typeof makeWASocket !== "function") {
+  console.error("❌ No se pudo cargar makeWASocket.");
+  console.error("Exportaciones encontradas:", Object.keys(baileys));
+  process.exit(1);
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -42,8 +50,6 @@ let stopped = false;
 let reconnecting = false;
 
 function banner() {
-  console.clear();
-
   console.log(`
 ╔══════════════════════════════════════╗
 ║                                      ║
@@ -57,7 +63,6 @@ function banner() {
 ╚══════════════════════════════════════╝
 
   Bienvenido a ${BOT_NAME}
-  Selecciona tu método de vinculación.
 `);
 }
 
@@ -73,14 +78,10 @@ async function loadPlugins() {
         path.join(PLUGINS_DIR, file)
       ).href;
 
-      const imported = await import(
-        `${url}?v=${Date.now()}`
-      );
-
+      const imported = await import(`${url}?v=${Date.now()}`);
       const plugin = imported.default;
 
-      if (!plugin?.name ||
-          typeof plugin.execute !== "function") {
+      if (!plugin?.name || typeof plugin.execute !== "function") {
         console.log(`⚠️ Plugin ignorado: ${file}`);
         continue;
       }
@@ -93,31 +94,29 @@ async function loadPlugins() {
 
       console.log(`✅ Plugin cargado: ${plugin.name}`);
     } catch (error) {
-      console.error(
-        `❌ Error cargando ${file}:`,
-        error.message
-      );
+      console.error(`❌ Error en ${file}:`, error.message);
     }
   }
 
-  console.log(`\n📦 Plugins disponibles: ${plugins.size}\n`);
+  console.log(`📦 Plugins disponibles: ${plugins.size}\n`);
 }
 
 async function chooseMethod() {
   if (state.creds.registered) {
     method = "saved";
-    console.log("🔐 Sesión guardada detectada.");
-    console.log("Intentando recuperar la conexión...\n");
+    console.log("🔐 Sesión guardada. Conectando...\n");
     return;
   }
 
   while (true) {
-    console.log("╭────────────────────────────────────╮");
-    console.log("│          ZENTRAX MD                │");
-    console.log("├────────────────────────────────────┤");
-    console.log("│  1. Conectar con QR                │");
-    console.log("│  2. Código de vinculación          │");
-    console.log("╰────────────────────────────────────╯\n");
+    console.log(`
+╭────────────────────────────────────╮
+│             ZENTRAX MD             │
+├────────────────────────────────────┤
+│  1. Conectar con QR                │
+│  2. Código de vinculación          │
+╰────────────────────────────────────╯
+`);
 
     const option = (await ask("Elige 1 o 2: ")).trim();
 
@@ -127,34 +126,23 @@ async function chooseMethod() {
     }
 
     if (option === "2") {
-      method = "pairing";
+      const input = (
+        await ask("Número internacional (ej. +51999999999): ")
+      ).trim();
 
-      while (true) {
-        const input = (
-          await ask(
-            "\nEscribe tu número internacional con código de país.\n" +
-            "Ejemplo: +51999999999\n" +
-            "Número: "
-          )
-        ).trim();
+      const digits = input.replace(/\D/g, "");
 
-        // Acepta +, espacios y guiones, pero envía
-        // únicamente los dígitos a Baileys.
-        const digits = input.replace(/\D/g, "");
-
-        if (/^[1-9]\d{7,14}$/.test(digits)) {
-          phoneNumber = digits;
-          return;
-        }
-
-        console.log(
-          "❌ Número inválido. Incluye el código de país, " +
-          "sin omitir ningún dígito."
-        );
+      if (!/^[1-9]\d{7,14}$/.test(digits)) {
+        console.log("❌ Número inválido. Inténtalo de nuevo.\n");
+        continue;
       }
+
+      phoneNumber = digits;
+      method = "pairing";
+      return;
     }
 
-    console.log("❌ Opción incorrecta. Escribe 1 o 2.\n");
+    console.log("❌ Opción incorrecta.\n");
   }
 }
 
@@ -164,57 +152,41 @@ async function requestPairingCode(currentSock) {
     state.creds.registered ||
     pairingRequested ||
     stopped
-  ) {
-    return;
-  }
+  ) return;
 
   pairingRequested = true;
 
   try {
-    // Permite que el socket se inicialice primero.
-    await new Promise((resolve) => setTimeout(resolve, 2500));
+    // Espera a que el socket comience a conectarse.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
 
     if (stopped || sock !== currentSock) {
       pairingRequested = false;
       return;
     }
 
-    console.log("\n⏳ Solicitando código a WhatsApp...\n");
+    const code = await currentSock.requestPairingCode(phoneNumber);
 
-    const code = await currentSock.requestPairingCode(
-      phoneNumber
-    );
+    console.log(`
+╔════════════════════════════════════╗
+║       CÓDIGO DE VINCULACIÓN        ║
+║             ${code}                 ║
+╚════════════════════════════════════╝
 
-    console.log("╔════════════════════════════════════╗");
-    console.log("║      CÓDIGO DE VINCULACIÓN         ║");
-    console.log(`║            ${code}                 ║`);
-    console.log("╚════════════════════════════════════╝");
-
-    console.log("\n📱 En tu teléfono:");
-    console.log("1. Abre WhatsApp.");
-    console.log("2. Ve a Dispositivos vinculados.");
-    console.log("3. Pulsa Vincular un dispositivo.");
-    console.log("4. Elige vincular con número de teléfono.");
-    console.log("5. Introduce el código mostrado arriba.\n");
+En WhatsApp:
+1. Abre Dispositivos vinculados.
+2. Pulsa Vincular un dispositivo.
+3. Elige la opción de vincular con número de teléfono.
+4. Introduce el código mostrado.
+`);
   } catch (error) {
     pairingRequested = false;
-
-    console.error(
-      "❌ No se pudo generar el código de vinculación."
-    );
-    console.error("Detalle:", error.message);
-    console.log(
-      "Comprueba el número internacional, la conexión y " +
-      "que tu versión de Baileys sea compatible.\n"
-    );
+    console.error("❌ Error generando el código:", error.message);
   }
 }
 
 async function createSocket() {
-  const { version } = await fetchLatestBaileysVersion();
-
   const currentSock = makeWASocket({
-    version,
     auth: state,
     logger: pino({ level: "silent" }),
     browser: [BOT_NAME, "Chrome", "1.0.0"],
@@ -238,11 +210,9 @@ async function createSocket() {
     }
 
     if (qr && method === "qr" && !state.creds.registered) {
-      console.log("\n📲 ESCANEA EL QR CON WHATSAPP\n");
+      console.log("\n📲 Escanea este QR con WhatsApp:\n");
       qrcode.generate(qr, { small: true });
-      console.log(
-        "\nWhatsApp → Dispositivos vinculados → Vincular dispositivo.\n"
-      );
+      console.log("WhatsApp → Dispositivos vinculados → Vincular dispositivo.");
     }
 
     if (
@@ -258,20 +228,16 @@ async function createSocket() {
       console.log(`👑 Propietario: ${OWNER}`);
       console.log(`⌨️ Prefijo: ${PREFIX}`);
       console.log("📦 Bot listo para recibir comandos.\n");
-
       reconnecting = false;
     }
 
     if (connection === "close") {
-      const status =
-        lastDisconnect?.error?.output?.statusCode;
+      const status = lastDisconnect?.error?.output?.statusCode;
 
       if (sock === currentSock) sock = null;
 
       if (status === DisconnectReason.loggedOut) {
-        console.log(
-          "❌ Sesión cerrada por WhatsApp. Debes vincularla de nuevo."
-        );
+        console.log("❌ Sesión cerrada. Debes vincular de nuevo.");
         stopped = true;
         rl.close();
         return;
@@ -280,9 +246,7 @@ async function createSocket() {
       if (stopped || reconnecting) return;
 
       reconnecting = true;
-      console.log(
-        "⚠️ Conexión interrumpida. Reintentando en 3 segundos..."
-      );
+      console.log("⚠️ Conexión interrumpida. Reintentando...");
 
       clearTimeout(reconnectTimer);
 
@@ -290,7 +254,7 @@ async function createSocket() {
         try {
           if (!stopped) await createSocket();
         } catch (error) {
-          console.error("Error al reconectar:", error.message);
+          console.error("❌ Error al reconectar:", error.message);
         } finally {
           reconnecting = false;
         }
@@ -310,12 +274,9 @@ async function createSocket() {
         !jid ||
         jid === "status@broadcast" ||
         jid.endsWith("@newsletter")
-      ) {
-        continue;
-      }
+      ) continue;
 
       const content = message.message;
-
       const body =
         content.conversation ||
         content.extendedTextMessage?.text ||
@@ -325,10 +286,7 @@ async function createSocket() {
 
       if (!body.startsWith(PREFIX)) continue;
 
-      const parts = body.slice(PREFIX.length)
-        .trim()
-        .split(/\s+/);
-
+      const parts = body.slice(PREFIX.length).trim().split(/\s+/);
       const command = (parts.shift() || "").toLowerCase();
 
       if (!command) continue;
@@ -345,10 +303,7 @@ async function createSocket() {
           owner: OWNER
         });
       } catch (error) {
-        console.error(
-          `❌ Error en ${PREFIX}${command}:`,
-          error.message
-        );
+        console.error(`❌ Error en ${PREFIX}${command}:`, error.message);
 
         await currentSock.sendMessage(jid, {
           text: "❌ Ocurrió un error al ejecutar el comando."
@@ -362,7 +317,6 @@ async function main() {
   banner();
 
   fs.mkdirSync(SESSION_DIR, { recursive: true });
-
   await loadPlugins();
 
   const session = await useMultiFileAuthState(SESSION_DIR);
@@ -386,10 +340,7 @@ process.on("unhandledRejection", (error) => {
 });
 
 main().catch((error) => {
-  console.error(
-    "❌ Error iniciando ZENTRAX MD:",
-    error.message
-  );
+  console.error("❌ Error iniciando ZENTRAX MD:", error.stack || error);
   rl.close();
   process.exitCode = 1;
 });
