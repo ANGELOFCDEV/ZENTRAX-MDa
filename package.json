@@ -1,0 +1,22 @@
+
+{
+  "name": "zentrax-md",
+  "version": "1.0.0",
+  "description": "ZENTRAX MD - WhatsApp Bot by ANGEL OFC DEV",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "author": "ANGEL OFC DEV",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.18",
+    "dotenv": "^16.4.7",
+    "pino": "^9.6.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
