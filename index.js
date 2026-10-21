@@ -1,15 +1,49 @@
 
-import makeWASocket, {
-  DisconnectReason,
-  useMultiFileAuthState
-} from "@whiskeysockets/baileys";
 
+import * as baileys from "@whiskeysockets/baileys";
 import pino from "pino";
 import qrcode from "qrcode-terminal";
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+const candidates = [
+  baileys.default,
+  baileys.default?.default,
+  baileys.makeWASocket,
+  baileys.default?.makeWASocket
+];
+
+const makeWASocket = candidates.find(
+  (candidate) => typeof candidate === "function"
+);
+
+const DisconnectReason =
+  baileys.DisconnectReason ??
+  baileys.default?.DisconnectReason;
+
+const useMultiFileAuthState =
+  baileys.useMultiFileAuthState ??
+  baileys.default?.useMultiFileAuthState;
+
+if (typeof makeWASocket !== "function") {
+  console.error("❌ Baileys no exporta makeWASocket como función.");
+  console.error("Versión:", baileys.VERSION ?? "no identificada");
+  console.error("Exportaciones:", Object.keys(baileys));
+  process.exit(1);
+}
+
+if (typeof useMultiFileAuthState !== "function") {
+  console.error("❌ No se encontró useMultiFileAuthState.");
+  process.exit(1);
+}
+
+if (!DisconnectReason) {
+  console.error("❌ No se encontró DisconnectReason.");
+  process.exit(1);
+}
+
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
