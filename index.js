@@ -30,20 +30,20 @@ const useMultiFileAuthState =
   baileys.useMultiFileAuthState ??
   baileys.default?.useMultiFileAuthState;
 
+const fetchLatestBaileysVersion =
+  baileys.fetchLatestBaileysVersion ??
+  baileys.default?.fetchLatestBaileysVersion;
+
 if (typeof makeWASocket !== "function") {
-  console.error("❌ No se encontró makeWASocket.");
-  console.error("Exportaciones:", Object.keys(baileys));
-  process.exit(1);
+  throw new Error("No se encontró makeWASocket en Baileys.");
 }
 
 if (typeof useMultiFileAuthState !== "function") {
-  console.error("❌ No se encontró useMultiFileAuthState.");
-  process.exit(1);
+  throw new Error("No se encontró useMultiFileAuthState.");
 }
 
 if (!DisconnectReason) {
-  console.error("❌ No se encontró DisconnectReason.");
-  process.exit(1);
+  throw new Error("No se encontró DisconnectReason.");
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -71,10 +71,15 @@ let saveCreds;
 let method = "";
 let phoneNumber = "";
 let pairingRequested = false;
-let reconnectTimer = null;
 let stopped = false;
+let reconnectTimer = null;
 let reconnecting = false;
+let pairingFailed = false;
 let connectionNumber = 0;
+let pairingCodePrinted = false;
+let retryCount = 0;
+
+const MAX_RETRIES = 5;
 
 // ============================================
 // BANNER
@@ -84,8 +89,7 @@ function banner() {
   console.log(`
 ╔══════════════════════════════════════════╗
 ║                                          ║
-║             Z E N T R A X                ║
-║                  M D                     ║
+║              ZENTRAX MD                  ║
 ║                                          ║
 ║             BY ANGEL OFC DEV             ║
 ║                                          ║
@@ -137,18 +141,15 @@ async function loadPlugins() {
 
       console.log(`✅ Plugin cargado: ${plugin.name}`);
     } catch (error) {
-      console.error(
-        `❌ Error en ${file}:`,
-        error.message
-      );
+      console.error(`❌ Error en ${file}:`, error.message);
     }
   }
 
-  console.log(`📦 Plugins disponibles: ${plugins.size}\n`);
+  console.log(`📦 Comandos y alias cargados: ${plugins.size}\n`);
 }
 
 // ============================================
-// SELECCIONAR MÉTODO DE VINCULACIÓN
+// MÉTODO DE VINCULACIÓN
 // ============================================
 
 async function chooseMethod() {
@@ -191,9 +192,7 @@ async function chooseMethod() {
         !/^[1-9]\d{6,13}$/.test(localNumber) ||
         !/^[1-9]\d{7,14}$/.test(fullNumber)
       ) {
-        console.log(
-          "❌ Número inválido. Revisa el código de país y el número.\n"
-        );
+        console.log("❌ Número inválido. Revisa los datos.\n");
         continue;
       }
 
@@ -207,7 +206,7 @@ async function chooseMethod() {
 }
 
 // ============================================
-// SOLICITAR CÓDIGO DE VINCULACIÓN
+// CÓDIGO DE VINCULACIÓN: UNA SOLA SOLICITUD
 // ============================================
 
 async function requestPairingCode(currentSock) {
@@ -215,7 +214,9 @@ async function requestPairingCode(currentSock) {
     method !== "pairing" ||
     state.creds.registered ||
     pairingRequested ||
-    stopped
+    pairingFailed ||
+    stopped ||
+    pairingCodePrinted
   ) {
     return;
   }
@@ -225,10 +226,14 @@ async function requestPairingCode(currentSock) {
   try {
     console.log("\n📲 Preparando código de vinculación...");
 
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    // Espera a que se establezca la conexión inicial.
+    await new Promise((resolve) => setTimeout(resolve, 2000));
 
-    if (stopped || sock !== currentSock) {
-      pairingRequested = false;
+    if (
+      stopped ||
+      sock !== currentSock ||
+      state.creds.registered
+    ) {
       return;
     }
 
@@ -236,9 +241,13 @@ async function requestPairingCode(currentSock) {
       phoneNumber
     );
 
+    if (stopped || sock !== currentSock) return;
+
+    pairingCodePrinted = true;
+
     console.log(`
 ╔══════════════════════════════════════════╗
-║         CÓDIGO DE VINCULACIÓN            ║
+║          CÓDIGO DE VINCULACIÓN           ║
 ╠══════════════════════════════════════════╣
 ║                                          ║
 ║              ${String(code).padEnd(20)}  ║
@@ -250,17 +259,21 @@ async function requestPairingCode(currentSock) {
 2. Entra en Dispositivos vinculados.
 3. Pulsa Vincular un dispositivo.
 4. Selecciona vincular con número de teléfono.
-5. Introduce el código actual.
+5. Introduce el código mostrado.
 
-⏳ Esperando que WhatsApp confirme la vinculación...
+⏳ Esperando confirmación de WhatsApp.
+⚠️ No solicites otro código mientras esperas.
 `);
-
   } catch (error) {
-    pairingRequested = false;
+    pairingFailed = true;
 
     console.error(
       "❌ No se pudo generar el código:",
       error?.message || error
+    );
+
+    console.log(
+      "Detuve las nuevas solicitudes de código para evitar el bucle."
     );
   }
 }
@@ -270,33 +283,53 @@ async function requestPairingCode(currentSock) {
 // ============================================
 
 async function createSocket() {
-  if (stopped) return;
+  if (stopped || sock || reconnecting) return;
 
   connectionNumber++;
 
-  const currentNumber = connectionNumber;
-
   console.log(
-    `\n🔄 Iniciando conexión (intento ${currentNumber})...`
+    `\n🔄 Iniciando conexión (intento ${connectionNumber})...`
   );
 
-  const currentSock = makeWASocket({
+  let version;
+
+  if (typeof fetchLatestBaileysVersion === "function") {
+    try {
+      const result = await fetchLatestBaileysVersion();
+      version = result?.version;
+
+      if (version) {
+        console.log(
+          `📡 Versión de WhatsApp Web: ${version.join(".")}`
+        );
+      }
+    } catch (error) {
+      console.warn(
+        "⚠️ No se pudo consultar la versión de WhatsApp Web:",
+        error.message
+      );
+    }
+  }
+
+  if (stopped) return;
+
+  const options = {
     auth: state,
     logger: pino({ level: "silent" }),
-    browser: [BOT_NAME, "Chrome", "1.0.0"],
+    browser: [BOT_NAME, "Chrome", "20.0.04"],
     printQRInTerminal: false,
     markOnlineOnConnect: false,
     syncFullHistory: false
-  });
+  };
 
+  if (version) {
+    options.version = version;
+  }
+
+  const currentSock = makeWASocket(options);
   sock = currentSock;
-  pairingRequested = false;
 
   currentSock.ev.on("creds.update", saveCreds);
-
-  // ==========================================
-  // ESTADO DE CONEXIÓN
-  // ==========================================
 
   currentSock.ev.on("connection.update", async (update) => {
     if (sock !== currentSock || stopped) return;
@@ -307,41 +340,35 @@ async function createSocket() {
       console.log("🔄 Conectando con WhatsApp...");
     }
 
-    // QR
-    if (
-      qr &&
-      method === "qr" &&
-      !state.creds.registered
-    ) {
-      console.log("\n📲 Escanea el QR con WhatsApp:\n");
-
+    if (qr && method === "qr" && !state.creds.registered) {
+      console.log("\n📲 Escanea este QR con WhatsApp:\n");
       qrcode.generate(qr, { small: true });
-
       console.log(
         "WhatsApp → Dispositivos vinculados → Vincular un dispositivo."
       );
     }
 
-    // Código de vinculación
+    // Solicitar el código una sola vez por proceso.
     if (
       method === "pairing" &&
       !state.creds.registered &&
-      !pairingRequested
+      !pairingRequested &&
+      !pairingFailed &&
+      !pairingCodePrinted
     ) {
       void requestPairingCode(currentSock);
     }
 
-    // CONEXIÓN EXITOSA
     if (connection === "open") {
       method = "saved";
-      reconnecting = false;
+      retryCount = 0;
       pairingRequested = false;
+      pairingFailed = false;
+      pairingCodePrinted = false;
 
       console.log(`
 ╔══════════════════════════════════════════╗
-║                                          ║
 ║          ✅ CONEXIÓN EXITOSA             ║
-║                                          ║
 ╚══════════════════════════════════════════╝
 
 🤖 Bot: ${BOT_NAME}
@@ -353,7 +380,6 @@ async function createSocket() {
 `);
     }
 
-    // CONEXIÓN CERRADA
     if (connection === "close") {
       const status =
         lastDisconnect?.error?.output?.statusCode;
@@ -371,33 +397,66 @@ async function createSocket() {
       }
 
       if (status === DisconnectReason.loggedOut) {
-        console.log(`
-❌ WhatsApp cerró la sesión.
-Debes volver a vincular el dispositivo.
-`);
-
+        console.log(
+          "❌ La sesión fue cerrada por WhatsApp. Debes volver a vincularla."
+        );
         stopped = true;
+        rl.close();
+        return;
+      }
+
+      // No generar códigos sin fin si aparece 405.
+      if (status === 405) {
+        console.error(`
+❌ WhatsApp rechazó la conexión (405).
+No generaré más códigos ni reiniciaré automáticamente.
+
+Revisa la versión de Baileys y vuelve a iniciar el bot
+cuando hayas corregido el problema.
+`);
+        stopped = true;
+        clearTimeout(reconnectTimer);
         rl.close();
         return;
       }
 
       if (stopped || reconnecting) return;
 
-      reconnecting = true;
+      if (!state.creds.registered && method === "pairing") {
+        pairingFailed = true;
 
-      console.log("🔄 Preparando una nueva conexión...");
+        console.log(
+          "⚠️ La vinculación no terminó. No pediré otro código automáticamente."
+        );
+
+        stopped = true;
+        rl.close();
+        return;
+      }
+
+      if (retryCount >= MAX_RETRIES) {
+        console.error(
+          "❌ Se alcanzó el límite de reconexiones. Revisa el error y reinicia manualmente."
+        );
+        stopped = true;
+        rl.close();
+        return;
+      }
+
+      reconnecting = true;
+      retryCount++;
+
+      console.log(
+        `🔄 Reintentando conexión (${retryCount}/${MAX_RETRIES})...`
+      );
 
       clearTimeout(reconnectTimer);
 
       reconnectTimer = setTimeout(async () => {
-        try {
-          if (!stopped) {
-            // Volver a solicitar el código solo si aún
-            // no se ha completado la vinculación.
-            if (!state.creds.registered && method !== "qr") {
-              method = "pairing";
-            }
+        reconnecting = false;
 
+        try {
+          if (!stopped && !sock) {
             await createSocket();
           }
         } catch (error) {
@@ -405,15 +464,13 @@ Debes volver a vincular el dispositivo.
             "❌ Error al reconectar:",
             error?.message || error
           );
-        } finally {
-          reconnecting = false;
         }
-      }, 4000);
+      }, 5000);
     }
   });
 
   // ==========================================
-  // RECIBIR MENSAJES Y EJECUTAR COMANDOS
+  // MENSAJES Y PLUGINS
   // ==========================================
 
   currentSock.ev.on(
@@ -462,7 +519,6 @@ Debes volver a vincular el dispositivo.
         if (!command) continue;
 
         const plugin = plugins.get(command);
-
         if (!plugin) continue;
 
         try {
@@ -519,7 +575,7 @@ async function main() {
 }
 
 // ============================================
-// ERRORES Y CIERRE
+// CIERRE SEGURO
 // ============================================
 
 process.on("SIGINT", () => {
@@ -527,6 +583,10 @@ process.on("SIGINT", () => {
   clearTimeout(reconnectTimer);
 
   console.log("\n👋 Cerrando ZENTRAX MD...");
+
+  try {
+    sock?.end(undefined);
+  } catch {}
 
   rl.close();
   process.exit(0);
