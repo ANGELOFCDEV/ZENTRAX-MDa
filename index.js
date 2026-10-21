@@ -1,5 +1,4 @@
 
-
 import * as baileys from "@whiskeysockets/baileys";
 import pino from "pino";
 import qrcode from "qrcode-terminal";
@@ -7,6 +6,10 @@ import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+// ============================================
+// ZENTRAX MD - ANGEL OFC DEV
+// ============================================
 
 const candidates = [
   baileys.default,
@@ -16,7 +19,7 @@ const candidates = [
 ];
 
 const makeWASocket = candidates.find(
-  (candidate) => typeof candidate === "function"
+  (item) => typeof item === "function"
 );
 
 const DisconnectReason =
@@ -28,8 +31,7 @@ const useMultiFileAuthState =
   baileys.default?.useMultiFileAuthState;
 
 if (typeof makeWASocket !== "function") {
-  console.error("❌ Baileys no exporta makeWASocket como función.");
-  console.error("Versión:", baileys.VERSION ?? "no identificada");
+  console.error("❌ No se encontró makeWASocket.");
   console.error("Exportaciones:", Object.keys(baileys));
   process.exit(1);
 }
@@ -43,7 +45,6 @@ if (!DisconnectReason) {
   console.error("❌ No se encontró DisconnectReason.");
   process.exit(1);
 }
-
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -59,8 +60,8 @@ const rl = readline.createInterface({
   output: process.stdout
 });
 
-const ask = (text) =>
-  new Promise((resolve) => rl.question(text, resolve));
+const ask = (question) =>
+  new Promise((resolve) => rl.question(question, resolve));
 
 const plugins = new Map();
 
@@ -73,25 +74,34 @@ let pairingRequested = false;
 let reconnectTimer = null;
 let stopped = false;
 let reconnecting = false;
+let connectionNumber = 0;
+
+// ============================================
+// BANNER
+// ============================================
 
 function banner() {
   console.log(`
-╔══════════════════════════════════════╗
-║                                      ║
-║          Z E N T R A X               ║
-║              M D                    ║
-║                                      ║
-║         BY ANGEL OFC DEV             ║
-║                                      ║
-║       WHATSAPP AUTOMATION BOT         ║
-║                                      ║
-╚══════════════════════════════════════╝
+╔══════════════════════════════════════════╗
+║                                          ║
+║             Z E N T R A X                ║
+║                  M D                     ║
+║                                          ║
+║             BY ANGEL OFC DEV             ║
+║                                          ║
+║          WHATSAPP AUTOMATION BOT         ║
+║                                          ║
+╚══════════════════════════════════════════╝
 
   Bienvenido a ${BOT_NAME}
   Creador: ${OWNER}
 
 `);
 }
+
+// ============================================
+// CARGAR PLUGINS
+// ============================================
 
 async function loadPlugins() {
   fs.mkdirSync(PLUGINS_DIR, { recursive: true });
@@ -101,14 +111,20 @@ async function loadPlugins() {
     if (!file.endsWith(".js")) continue;
 
     try {
-      const url = pathToFileURL(
+      const pluginUrl = pathToFileURL(
         path.join(PLUGINS_DIR, file)
       ).href;
 
-      const imported = await import(`${url}?v=${Date.now()}`);
+      const imported = await import(
+        `${pluginUrl}?v=${Date.now()}`
+      );
+
       const plugin = imported.default;
 
-      if (!plugin?.name || typeof plugin.execute !== "function") {
+      if (
+        !plugin?.name ||
+        typeof plugin.execute !== "function"
+      ) {
         console.log(`⚠️ Plugin ignorado: ${file}`);
         continue;
       }
@@ -121,12 +137,19 @@ async function loadPlugins() {
 
       console.log(`✅ Plugin cargado: ${plugin.name}`);
     } catch (error) {
-      console.error(`❌ Error en ${file}:`, error.message);
+      console.error(
+        `❌ Error en ${file}:`,
+        error.message
+      );
     }
   }
 
   console.log(`📦 Plugins disponibles: ${plugins.size}\n`);
 }
+
+// ============================================
+// SELECCIONAR MÉTODO DE VINCULACIÓN
+// ============================================
 
 async function chooseMethod() {
   if (state.creds.registered) {
@@ -135,14 +158,14 @@ async function chooseMethod() {
     return;
   }
 
-  while (true) {
+  while (!stopped) {
     console.log(`
-╭────────────────────────────────────╮
-│             ZENTRAX MD             │
-├────────────────────────────────────┤
-│  1. Conectar con QR                │
-│  2. Código de vinculación          │
-╰────────────────────────────────────╯
+╭────────────────────────────────────────╮
+│               ZENTRAX MD               │
+├────────────────────────────────────────┤
+│  1. Conectar con QR                    │
+│  2. Código de vinculación              │
+╰────────────────────────────────────────╯
 `);
 
     const option = (await ask("Elige 1 o 2: ")).trim();
@@ -154,13 +177,11 @@ async function chooseMethod() {
 
     if (option === "2") {
       const country = (
-        await ask(
-          "Código de país sin + (Perú 51, México 52): "
-        )
+        await ask("Código de país sin + (Perú 51): ")
       ).replace(/\D/g, "");
 
       const localNumber = (
-        await ask("Número de teléfono sin prefijo: ")
+        await ask("Número local sin código de país: ")
       ).replace(/\D/g, "");
 
       const fullNumber = country + localNumber;
@@ -171,7 +192,7 @@ async function chooseMethod() {
         !/^[1-9]\d{7,14}$/.test(fullNumber)
       ) {
         console.log(
-          "❌ Número inválido. Comprueba el país y el número.\n"
+          "❌ Número inválido. Revisa el código de país y el número.\n"
         );
         continue;
       }
@@ -181,9 +202,13 @@ async function chooseMethod() {
       return;
     }
 
-    console.log("❌ Opción incorrecta. Elige 1 o 2.\n");
+    console.log("❌ Opción incorrecta. Escribe 1 o 2.\n");
   }
 }
+
+// ============================================
+// SOLICITAR CÓDIGO DE VINCULACIÓN
+// ============================================
 
 async function requestPairingCode(currentSock) {
   if (
@@ -198,6 +223,8 @@ async function requestPairingCode(currentSock) {
   pairingRequested = true;
 
   try {
+    console.log("\n📲 Preparando código de vinculación...");
+
     await new Promise((resolve) => setTimeout(resolve, 1500));
 
     if (stopped || sock !== currentSock) {
@@ -205,34 +232,54 @@ async function requestPairingCode(currentSock) {
       return;
     }
 
-    const code = await currentSock.requestPairingCode(phoneNumber);
+    const code = await currentSock.requestPairingCode(
+      phoneNumber
+    );
 
     console.log(`
-╔════════════════════════════════════╗
-║       CÓDIGO DE VINCULACIÓN        ║
-║                                    ║
-║             ${code}                 ║
-║                                    ║
-╚════════════════════════════════════╝
+╔══════════════════════════════════════════╗
+║         CÓDIGO DE VINCULACIÓN            ║
+╠══════════════════════════════════════════╣
+║                                          ║
+║              ${String(code).padEnd(20)}  ║
+║                                          ║
+╚══════════════════════════════════════════╝
 
-En tu WhatsApp:
-1. Abre Dispositivos vinculados.
-2. Pulsa Vincular un dispositivo.
-3. Selecciona vincular con número de teléfono.
-4. Introduce el código mostrado.
+📱 En WhatsApp:
+1. Abre Ajustes.
+2. Entra en Dispositivos vinculados.
+3. Pulsa Vincular un dispositivo.
+4. Selecciona vincular con número de teléfono.
+5. Introduce el código actual.
 
-No compartas este código con nadie.
+⏳ Esperando que WhatsApp confirme la vinculación...
 `);
+
   } catch (error) {
     pairingRequested = false;
+
     console.error(
-      "❌ Error generando el código:",
-      error.message
+      "❌ No se pudo generar el código:",
+      error?.message || error
     );
   }
 }
 
+// ============================================
+// CREAR CONEXIÓN
+// ============================================
+
 async function createSocket() {
+  if (stopped) return;
+
+  connectionNumber++;
+
+  const currentNumber = connectionNumber;
+
+  console.log(
+    `\n🔄 Iniciando conexión (intento ${currentNumber})...`
+  );
+
   const currentSock = makeWASocket({
     auth: state,
     logger: pino({ level: "silent" }),
@@ -247,6 +294,10 @@ async function createSocket() {
 
   currentSock.ev.on("creds.update", saveCreds);
 
+  // ==========================================
+  // ESTADO DE CONEXIÓN
+  // ==========================================
+
   currentSock.ev.on("connection.update", async (update) => {
     if (sock !== currentSock || stopped) return;
 
@@ -256,14 +307,22 @@ async function createSocket() {
       console.log("🔄 Conectando con WhatsApp...");
     }
 
-    if (qr && method === "qr" && !state.creds.registered) {
-      console.log("\n📲 Escanea este QR con WhatsApp:\n");
+    // QR
+    if (
+      qr &&
+      method === "qr" &&
+      !state.creds.registered
+    ) {
+      console.log("\n📲 Escanea el QR con WhatsApp:\n");
+
       qrcode.generate(qr, { small: true });
+
       console.log(
-        "WhatsApp → Dispositivos vinculados → Vincular dispositivo."
+        "WhatsApp → Dispositivos vinculados → Vincular un dispositivo."
       );
     }
 
+    // Código de vinculación
     if (
       method === "pairing" &&
       !state.creds.registered &&
@@ -272,25 +331,51 @@ async function createSocket() {
       void requestPairingCode(currentSock);
     }
 
+    // CONEXIÓN EXITOSA
     if (connection === "open") {
-      console.log(`\n✅ ${BOT_NAME} CONECTADO`);
-      console.log(`👑 Propietario: ${OWNER}`);
-      console.log(`⌨️ Prefijo de comandos: ${PREFIX}`);
-      console.log("📦 Bot listo para recibir comandos.\n");
+      method = "saved";
       reconnecting = false;
+      pairingRequested = false;
+
+      console.log(`
+╔══════════════════════════════════════════╗
+║                                          ║
+║          ✅ CONEXIÓN EXITOSA             ║
+║                                          ║
+╚══════════════════════════════════════════╝
+
+🤖 Bot: ${BOT_NAME}
+👑 Creador: ${OWNER}
+⌨️ Prefijo: ${PREFIX}
+🟢 WhatsApp está conectado.
+📦 El bot está listo para recibir comandos.
+
+`);
     }
 
+    // CONEXIÓN CERRADA
     if (connection === "close") {
-      const status = lastDisconnect?.error?.output?.statusCode;
+      const status =
+        lastDisconnect?.error?.output?.statusCode;
+
+      const detail =
+        lastDisconnect?.error?.message ||
+        "Sin detalles adicionales";
+
+      console.log("\n⚠️ La conexión se cerró.");
+      console.log("Código de cierre:", status);
+      console.log("Motivo:", detail);
 
       if (sock === currentSock) {
         sock = null;
       }
 
       if (status === DisconnectReason.loggedOut) {
-        console.log(
-          "❌ Sesión cerrada. Debes vincular WhatsApp nuevamente."
-        );
+        console.log(`
+❌ WhatsApp cerró la sesión.
+Debes volver a vincular el dispositivo.
+`);
+
         stopped = true;
         rl.close();
         return;
@@ -299,31 +384,48 @@ async function createSocket() {
       if (stopped || reconnecting) return;
 
       reconnecting = true;
-      console.log("⚠️ Conexión interrumpida. Reintentando...");
+
+      console.log("🔄 Preparando una nueva conexión...");
 
       clearTimeout(reconnectTimer);
 
       reconnectTimer = setTimeout(async () => {
         try {
           if (!stopped) {
+            // Volver a solicitar el código solo si aún
+            // no se ha completado la vinculación.
+            if (!state.creds.registered && method !== "qr") {
+              method = "pairing";
+            }
+
             await createSocket();
           }
         } catch (error) {
           console.error(
             "❌ Error al reconectar:",
-            error.message
+            error?.message || error
           );
         } finally {
           reconnecting = false;
         }
-      }, 3000);
+      }, 4000);
     }
   });
+
+  // ==========================================
+  // RECIBIR MENSAJES Y EJECUTAR COMANDOS
+  // ==========================================
 
   currentSock.ev.on(
     "messages.upsert",
     async ({ messages, type }) => {
-      if (type !== "notify" || sock !== currentSock) return;
+      if (
+        type !== "notify" ||
+        sock !== currentSock ||
+        stopped
+      ) {
+        return;
+      }
 
       for (const message of messages) {
         if (!message.message || message.key.fromMe) continue;
@@ -345,6 +447,7 @@ async function createSocket() {
           content.extendedTextMessage?.text ||
           content.imageMessage?.caption ||
           content.videoMessage?.caption ||
+          content.documentMessage?.caption ||
           "";
 
         if (!body.startsWith(PREFIX)) continue;
@@ -359,6 +462,7 @@ async function createSocket() {
         if (!command) continue;
 
         const plugin = plugins.get(command);
+
         if (!plugin) continue;
 
         try {
@@ -372,17 +476,28 @@ async function createSocket() {
         } catch (error) {
           console.error(
             `❌ Error en ${PREFIX}${command}:`,
-            error.message
+            error?.message || error
           );
 
-          await currentSock.sendMessage(jid, {
-            text: "❌ Ocurrió un error al ejecutar el comando."
-          });
+          try {
+            await currentSock.sendMessage(jid, {
+              text: "❌ Ocurrió un error al ejecutar el comando."
+            });
+          } catch (sendError) {
+            console.error(
+              "No se pudo enviar el mensaje:",
+              sendError.message
+            );
+          }
         }
       }
     }
   );
 }
+
+// ============================================
+// INICIAR BOT
+// ============================================
 
 async function main() {
   banner();
@@ -397,13 +512,22 @@ async function main() {
   saveCreds = session.saveCreds;
 
   await chooseMethod();
-  await createSocket();
+
+  if (!stopped) {
+    await createSocket();
+  }
 }
+
+// ============================================
+// ERRORES Y CIERRE
+// ============================================
 
 process.on("SIGINT", () => {
   stopped = true;
   clearTimeout(reconnectTimer);
-  console.log("\nCerrando ZENTRAX MD...");
+
+  console.log("\n👋 Cerrando ZENTRAX MD...");
+
   rl.close();
   process.exit(0);
 });
@@ -411,14 +535,14 @@ process.on("SIGINT", () => {
 process.on("unhandledRejection", (error) => {
   console.error(
     "❌ Error asíncrono:",
-    error?.message || error
+    error?.stack || error
   );
 });
 
 main().catch((error) => {
   console.error(
     "❌ Error iniciando ZENTRAX MD:",
-    error.stack || error
+    error?.stack || error
   );
 
   rl.close();
